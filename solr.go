@@ -14,6 +14,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"github.com/gorilla/schema"
+	"reflect"
+	"strconv"
+	"log"
 )
 
 /*
@@ -551,3 +555,90 @@ func (c *Connection) Update(m map[string]interface{}, commit bool) (*UpdateRespo
 // func (c *Connection) Commit() (*UpdateResponse, error) {
 
 // }
+
+func (r *SelectResponse ) ToStruct(i interface{}) (error){
+	t := reflect.TypeOf(i)
+
+	log.Println(t)
+
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}else{
+		return fmt.Errorf("Interface must be a pointer to a struct or a slice of pointers to a struct, %v given", t)
+	}
+
+	var toSlice = false
+
+	if t.Kind() == reflect.Slice{
+		toSlice = true
+		t = t.Elem().Elem()
+	}else if len(r.Results.Collection) > 1{
+		return fmt.Errorf("Result up to 1. You must consider using a Slice, %v given", reflect.TypeOf(i))
+	}
+
+	if t.Kind() != reflect.Struct{
+		return fmt.Errorf("Interface must be a pointer to a struct or a pointer to a slice of pointers to a struct, %v given", reflect.TypeOf(i))
+	}
+
+	if toSlice{
+		sliceValue := reflect.Indirect(reflect.ValueOf(i))
+		for _,value := range r.Results.Collection{
+			log.Println(t)
+			populateValue, err := PopulateInterface(value, t)
+			if err != nil{
+				return err
+			}
+
+			sliceValue.Set(reflect.Append(sliceValue, populateValue))
+		}
+	}else{
+		dest := reflect.ValueOf(i)
+		populateValue, err := PopulateInterface(r.Results.Collection[0], t)
+		if err != nil{
+			return err
+		}
+
+		dest.Elem().Set(populateValue.Elem())
+	}
+
+	return nil
+
+}
+
+func PopulateInterface(document Document, StructType reflect.Type) (reflect.Value, error){
+		decoder := schema.NewDecoder()
+		decoder.IgnoreUnknownKeys(true)
+
+		gorillaMap := make(map[string][]string) 
+
+		for key, field := range document.Fields{
+
+			var fieldString []string
+
+			switch fieldType := field.(type) {		
+				case string:
+					fieldString = []string{fieldType}		   	
+				case bool:
+					fieldString = []string{strconv.FormatBool(fieldType)}
+				case float64:
+					fieldString = []string{strconv.FormatFloat(fieldType, 'f', -1, 64 )}
+			}
+				
+			if len(fieldString) > 0{
+				gorillaMap[key] = fieldString
+			}
+		}
+
+		documentStruct := reflect.New(StructType)
+
+		err := decoder.Decode(documentStruct.Interface(), gorillaMap)
+
+		if err != nil {
+				return reflect.Value{}, err
+		    }
+
+		return documentStruct, nil
+
+}
+
+
